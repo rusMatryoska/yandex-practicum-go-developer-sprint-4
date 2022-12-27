@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 )
 
 const (
@@ -22,8 +23,11 @@ const (
 var (
 	ErrConflict  = errors.New(`409 Conflict`)
 	ErrNoContent = errors.New(`204 No Content`)
+	ErrGone      = errors.New(`410 Gone`)
 	SecretKey    = GenerateRandom(16)
 )
+
+type UserIDKey struct{}
 
 type SignInStruct struct {
 	UserID string `json:"user_id"`
@@ -33,6 +37,8 @@ type MiddlewareStruct struct {
 	SecretKey []byte
 	BaseURL   string
 	Server    string
+	MU        sync.Mutex
+	CH        chan ChanDelete
 }
 
 type JSONStructForAuth struct {
@@ -62,6 +68,11 @@ type JSONBatchRequest struct {
 type JSONBatchResponse struct {
 	CorrelationID string `json:"correlation_id"`
 	ShortenURL    string `json:"short_url"`
+}
+
+type ChanDelete struct {
+	User string
+	URLS string
 }
 
 func GenerateRandom(size int) []byte {
@@ -162,11 +173,9 @@ func (s *MiddlewareStruct) CheckAuth(next http.Handler) http.Handler {
 			http.SetCookie(w, cookieUserID)
 		}
 
-		ctx := context.WithValue(r.Context(), "user", UserID)
+		ctx := context.WithValue(r.Context(), UserIDKey{}, UserID)
 
 		r = r.WithContext(ctx)
 		next.ServeHTTP(w, r)
 	})
 }
-
-//type RequestIDKey struct{}

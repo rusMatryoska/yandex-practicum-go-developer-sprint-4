@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	m "github.com/rusMatryoska/yandex-practicum-go-developer-sprint-3/internal/middleware"
-	s "github.com/rusMatryoska/yandex-practicum-go-developer-sprint-3/internal/storage"
+	m "github.com/rusMatryoska/yandex-practicum-go-developer-sprint-4/internal/middleware"
+	s "github.com/rusMatryoska/yandex-practicum-go-developer-sprint-4/internal/storage"
 )
 
 type StorageHandlers struct {
@@ -64,7 +64,7 @@ func (sh StorageHandlers) PostAddURLHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	url := string(urlBytes)
-	user := r.Context().Value("user").(string)
+	user := r.Context().Value(m.UserIDKey{}).(string)
 	if user == "" {
 		user = m.GetCookie(r, m.CookieUserID)
 	}
@@ -91,7 +91,7 @@ func (sh StorageHandlers) ShortenBatchHandler(w http.ResponseWriter, r *http.Req
 		batchRequestList  []m.JSONBatchRequest
 		batchResponseList []m.JSONBatchResponse
 	)
-	user := r.Context().Value("user").(string)
+	user := r.Context().Value(m.UserIDKey{}).(string)
 	if user == "" {
 		user = m.GetCookie(r, m.CookieUserID)
 	}
@@ -139,7 +139,7 @@ func (sh StorageHandlers) ShortenHandler(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "failed read request", http.StatusInternalServerError)
 		return
 	}
-	user := r.Context().Value("user").(string)
+	user := r.Context().Value(m.UserIDKey{}).(string)
 	if user == "" {
 		user = m.GetCookie(r, m.CookieUserID)
 	}
@@ -178,8 +178,14 @@ func (sh StorageHandlers) GetURLHandler(w http.ResponseWriter, r *http.Request) 
 	}
 	url, err := sh.storage.SearchURL(id)
 	if err != nil {
-		http.Error(w, "There is no URL with this ID", http.StatusNotFound)
-		return
+		if errors.Is(m.NewStorageError(m.ErrGone, "410"), err) {
+			w.WriteHeader(http.StatusGone)
+			w.Write([]byte(url))
+			return
+		} else {
+			http.Error(w, "There is no URL with this ID", http.StatusNotFound)
+			return
+		}
 	} else {
 		w.Header().Set("Location", url)
 		w.WriteHeader(http.StatusTemporaryRedirect)
@@ -189,7 +195,7 @@ func (sh StorageHandlers) GetURLHandler(w http.ResponseWriter, r *http.Request) 
 }
 
 func (sh StorageHandlers) GetAllURLsHandler(w http.ResponseWriter, r *http.Request) {
-	user := r.Context().Value("user").(string)
+	user := r.Context().Value(m.UserIDKey{}).(string)
 	if user == "" {
 		user = m.GetCookie(r, m.CookieUserID)
 	}
@@ -210,6 +216,30 @@ func (sh StorageHandlers) GetAllURLsHandler(w http.ResponseWriter, r *http.Reque
 
 }
 
+func (sh *StorageHandlers) DeleteHandler(w http.ResponseWriter, r *http.Request) {
+	sh.mw.MU.Lock()
+	defer sh.mw.MU.Unlock()
+
+	user := r.Context().Value(m.UserIDKey{}).(string)
+	if user == "" {
+		user = m.GetCookie(r, m.CookieUserID)
+	}
+
+	urls, err := io.ReadAll(r.Body)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+	} else {
+		w.WriteHeader(http.StatusAccepted)
+	}
+
+	st := m.ChanDelete{User: user, URLS: string(urls)}
+	sh.mw.CH <- st
+
+	//sh.storage.DeleteForUser(string(urls), user)
+}
+
 func NewRouter(storage s.Storage, mw m.MiddlewareStruct) *mux.Router {
 
 	router := mux.NewRouter()
@@ -227,6 +257,8 @@ func NewRouter(storage s.Storage, mw m.MiddlewareStruct) *mux.Router {
 	router.HandleFunc("/ping", handlers.PingDB).Methods("GET")
 	router.HandleFunc("/{id}", handlers.GetURLHandler).Methods("GET")
 	router.HandleFunc("/api/user/urls", handlers.GetAllURLsHandler).Methods("GET")
+
+	router.HandleFunc("/api/user/urls", handlers.DeleteHandler).Methods("DELETE")
 
 	return router
 }
